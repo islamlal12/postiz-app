@@ -84,19 +84,19 @@ export class InstagramStandaloneProvider
     ).json();
 
     const {
-      user_id,
+      id: user_id,
       name,
       username,
       profile_picture_url = '',
     } = await (
       await fetch(
-        `https://graph.instagram.com/${META_GRAPH_API_VERSION}/me?fields=user_id,username,name,profile_picture_url&access_token=${access_token}`
+        `https://graph.instagram.com/${META_GRAPH_API_VERSION}/me?fields=id,username,name,profile_picture_url&access_token=${access_token}`
       )
     ).json();
 
     return {
       id: user_id,
-      name,
+      name: name || username || 'Instagram',
       accessToken: access_token,
       refreshToken: access_token,
       expiresIn: dayjs().add(58, 'days').unix() - dayjs().unix(),
@@ -130,53 +130,100 @@ export class InstagramStandaloneProvider
     codeVerifier: string;
     refresh: string;
   }) {
-    const formData = new FormData();
-    formData.append('client_id', process.env.INSTAGRAM_APP_ID!);
-    formData.append('client_secret', process.env.INSTAGRAM_APP_SECRET!);
-    formData.append('grant_type', 'authorization_code');
-    formData.append(
-      'redirect_uri',
-      `${
-        process?.env.FRONTEND_URL?.indexOf('https') == -1
-          ? `https://redirectmeto.com/${process?.env.FRONTEND_URL}`
-          : `${process?.env.FRONTEND_URL}`
-      }/integrations/social/instagram-standalone`
-    );
-    formData.append('code', params.code);
+    const rawCode = String(params.code || '');
+    const cleanCode = rawCode.replace(/#_.*$/, '').replace(/#.*$/, '').trim();
+    const baseUri = `${
+      process?.env.FRONTEND_URL?.indexOf('https') == -1
+        ? `https://redirectmeto.com/${process?.env.FRONTEND_URL}`
+        : `${process?.env.FRONTEND_URL}`
+    }/integrations/social/instagram-standalone`.replace(/\/+$/, '');
 
-    const getAccessToken = await (
-      await fetch('https://api.instagram.com/oauth/access_token', {
-        method: 'POST',
-        body: formData,
-      })
-    ).json();
+    const tryExchange = async (redirectUri: string, codeToUse: string) => {
+      const formData = new FormData();
+      formData.append('client_id', process.env.INSTAGRAM_APP_ID!);
+      formData.append('client_secret', process.env.INSTAGRAM_APP_SECRET!);
+      formData.append('grant_type', 'authorization_code');
+      formData.append('redirect_uri', redirectUri);
+      formData.append('code', codeToUse);
 
-    const { access_token, expires_in, ...all } = await (
+      const res = await (
+        await fetch('https://api.instagram.com/oauth/access_token', {
+          method: 'POST',
+          body: formData,
+        })
+      ).json();
+      return res;
+    };
+
+    let getAccessToken = await tryExchange(baseUri, cleanCode);
+    if (
+      getAccessToken?.error_message?.includes('redirect_uri') ||
+      getAccessToken?.error_message?.includes('verification code')
+    ) {
+      getAccessToken = await tryExchange(baseUri + '/', cleanCode);
+    }
+    if (
+      (getAccessToken?.error_message?.includes('redirect_uri') ||
+        getAccessToken?.error_message?.includes('verification code')) &&
+      rawCode !== cleanCode
+    ) {
+      getAccessToken = await tryExchange(baseUri, rawCode);
+    }
+
+    if (
+      getAccessToken?.error_type === 'OAuthException' ||
+      getAccessToken?.error_message ||
+      getAccessToken?.error
+    ) {
+      const errMsg =
+        getAccessToken.error_message ||
+        getAccessToken.error?.message ||
+        'Instagram token exchange failed';
+      console.error('IG_TOKEN_EXCHANGE_FAILED:', errMsg);
+      return errMsg;
+    }
+
+    let finalAccessToken = getAccessToken.access_token;
+    try {
+      const longLived = await (
+        await fetch(
+          'https://graph.instagram.com/access_token' +
+            '?grant_type=ig_exchange_token' +
+            `&client_id=${process.env.INSTAGRAM_APP_ID}` +
+            `&client_secret=${process.env.INSTAGRAM_APP_SECRET}` +
+            `&access_token=${getAccessToken.access_token}`
+        )
+      ).json();
+      if (longLived.access_token) {
+        finalAccessToken = longLived.access_token;
+      }
+    } catch (e) {
+      console.error('IG_LONGLIVED_ERR:', e);
+    }
+
+    if (getAccessToken.permissions) {
+      this.checkScopes(this.scopes, getAccessToken.permissions);
+    }
+
+    const me = await (
       await fetch(
-        'https://graph.instagram.com/access_token' +
-          '?grant_type=ig_exchange_token' +
-          `&client_id=${process.env.INSTAGRAM_APP_ID}` +
-          `&client_secret=${process.env.INSTAGRAM_APP_SECRET}` +
-          `&access_token=${getAccessToken.access_token}`
+        `https://graph.instagram.com/${META_GRAPH_API_VERSION}/me?fields=id,username,name,profile_picture_url&access_token=${finalAccessToken}`
       )
     ).json();
 
-    this.checkScopes(this.scopes, getAccessToken.permissions);
-
-    const { user_id, name, username, profile_picture_url } = await (
-      await fetch(
-        `https://graph.instagram.com/${META_GRAPH_API_VERSION}/me?fields=user_id,username,name,profile_picture_url&access_token=${access_token}`
-      )
-    ).json();
+    const finalId = String(me?.id || me?.user_id || getAccessToken?.user_id || '');
+    const finalUsername = me?.username || 'instagram';
+    const finalName = me?.name || finalUsername;
+    const finalPicture = me?.profile_picture_url || '';
 
     return {
-      id: user_id,
-      name,
-      accessToken: access_token,
-      refreshToken: access_token,
+      id: finalId,
+      name: finalName,
+      accessToken: finalAccessToken,
+      refreshToken: finalAccessToken,
       expiresIn: dayjs().add(58, 'days').unix() - dayjs().unix(),
-      picture: profile_picture_url,
-      username,
+      picture: finalPicture,
+      username: finalUsername,
     };
   }
 

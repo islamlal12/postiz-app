@@ -55,48 +55,46 @@ export class NoAuthIntegrationsController {
       throw new Error('Integration not allowed');
     }
 
+    const rawState = String(body.state || '');
+    const cleanState = rawState.replace(/#_.*$/, '').replace(/#.*$/, '').trim();
+    const rawCode = String(body.code || '');
+    const cleanCode = rawCode.replace(/#_.*$/, '').replace(/#.*$/, '').trim();
+    body.code = cleanCode;
+
     const integrationProvider =
       this._integrationManager.getSocialIntegration(integration);
 
-    const getCodeVerifier = integrationProvider.customFields
+    let getCodeVerifier = integrationProvider.customFields
       ? 'none'
-      : await ioRedis.get(`login:${body.state}`);
+      : ((await ioRedis.get(`login:${rawState}`)) || (await ioRedis.get(`login:${cleanState}`)));
     if (!getCodeVerifier) {
-      // The state expires after an hour and is deleted once used (page reload)
+      console.log(`[connectSocialMedia] login state not found in redis for ${integration}. Fallback to none.`);
+      getCodeVerifier = 'none';
+    }
+
+    const organization =
+      (await ioRedis.get(`organization:${rawState}`)) ||
+      (await ioRedis.get(`organization:${cleanState}`));
+    if (!organization) {
       throw new HttpException(
         'This connection link expired or was already used, please connect the channel again',
         400
       );
     }
 
-    const organization = await ioRedis.get(`organization:${body.state}`);
-    if (!organization) {
-      throw new Error('Organization not found');
-    }
-
     const org = await this._organizationService.getOrgById(organization);
 
-    if (!integrationProvider.customFields) {
-      await ioRedis.del(`login:${body.state}`);
-    }
-
     const details = integrationProvider.externalUrl
-      ? await ioRedis.get(`external:${body.state}`)
+      ? ((await ioRedis.get(`external:${rawState}`)) || (await ioRedis.get(`external:${cleanState}`)))
       : undefined;
 
-    if (details) {
-      await ioRedis.del(`external:${body.state}`);
-    }
+    const refresh =
+      (await ioRedis.get(`refresh:${rawState}`)) ||
+      (await ioRedis.get(`refresh:${cleanState}`));
 
-    const refresh = await ioRedis.get(`refresh:${body.state}`);
-    if (refresh) {
-      await ioRedis.del(`refresh:${body.state}`);
-    }
-
-    const onboarding = await ioRedis.get(`onboarding:${body.state}`);
-    if (onboarding) {
-      await ioRedis.del(`onboarding:${body.state}`);
-    }
+    const onboarding =
+      (await ioRedis.get(`onboarding:${rawState}`)) ||
+      (await ioRedis.get(`onboarding:${cleanState}`));
 
     const {
       error,
