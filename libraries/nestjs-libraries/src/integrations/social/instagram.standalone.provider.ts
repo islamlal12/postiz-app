@@ -105,18 +105,23 @@ export class InstagramStandaloneProvider
     };
   }
 
+  private getRedirectUri(): string {
+    const frontendUrl = process?.env.FRONTEND_URL || '';
+    const domain = frontendUrl.indexOf('https') === -1
+      ? `https://redirectmeto.com/${frontendUrl}`
+      : frontendUrl;
+    return `${domain.replace(/\/+$/, '')}/integrations/social/instagram-standalone`;
+  }
+
   async generateAuthUrl() {
     const state = makeSecureId(6);
+    const redirectUri = this.getRedirectUri();
     return {
       url:
         `https://www.instagram.com/oauth/authorize?enable_fb_login=0&client_id=${
           process.env.INSTAGRAM_APP_ID
         }&redirect_uri=${encodeURIComponent(
-          `${
-            process?.env.FRONTEND_URL?.indexOf('https') == -1
-              ? `https://redirectmeto.com/${process?.env.FRONTEND_URL}`
-              : `${process?.env.FRONTEND_URL}`
-          }/integrations/social/instagram-standalone`
+          redirectUri
         )}&response_type=code&scope=${encodeURIComponent(
           this.scopes.join(',')
         )}` + `&state=${state}`,
@@ -130,45 +135,22 @@ export class InstagramStandaloneProvider
     codeVerifier: string;
     refresh: string;
   }) {
-    const rawCode = String(params.code || '');
-    const cleanCode = rawCode.replace(/#_.*$/, '').replace(/#.*$/, '').trim();
-    const baseUri = `${
-      process?.env.FRONTEND_URL?.indexOf('https') == -1
-        ? `https://redirectmeto.com/${process?.env.FRONTEND_URL}`
-        : `${process?.env.FRONTEND_URL}`
-    }/integrations/social/instagram-standalone`.replace(/\/+$/, '');
+    const cleanCode = String(params.code || '').replace(/#.*$/, '').trim();
+    const redirectUri = this.getRedirectUri();
 
-    const tryExchange = async (redirectUri: string, codeToUse: string) => {
-      const formData = new FormData();
-      formData.append('client_id', process.env.INSTAGRAM_APP_ID!);
-      formData.append('client_secret', process.env.INSTAGRAM_APP_SECRET!);
-      formData.append('grant_type', 'authorization_code');
-      formData.append('redirect_uri', redirectUri);
-      formData.append('code', codeToUse);
+    const formData = new FormData();
+    formData.append('client_id', process.env.INSTAGRAM_APP_ID!);
+    formData.append('client_secret', process.env.INSTAGRAM_APP_SECRET!);
+    formData.append('grant_type', 'authorization_code');
+    formData.append('redirect_uri', redirectUri);
+    formData.append('code', cleanCode);
 
-      const res = await (
-        await fetch('https://api.instagram.com/oauth/access_token', {
-          method: 'POST',
-          body: formData,
-        })
-      ).json();
-      return res;
-    };
-
-    let getAccessToken = await tryExchange(baseUri, cleanCode);
-    if (
-      getAccessToken?.error_message?.includes('redirect_uri') ||
-      getAccessToken?.error_message?.includes('verification code')
-    ) {
-      getAccessToken = await tryExchange(baseUri + '/', cleanCode);
-    }
-    if (
-      (getAccessToken?.error_message?.includes('redirect_uri') ||
-        getAccessToken?.error_message?.includes('verification code')) &&
-      rawCode !== cleanCode
-    ) {
-      getAccessToken = await tryExchange(baseUri, rawCode);
-    }
+    const getAccessToken = await (
+      await fetch('https://api.instagram.com/oauth/access_token', {
+        method: 'POST',
+        body: formData,
+      })
+    ).json();
 
     if (
       getAccessToken?.error_type === 'OAuthException' ||
@@ -184,6 +166,8 @@ export class InstagramStandaloneProvider
     }
 
     let finalAccessToken = getAccessToken.access_token;
+    let tokenExpiresIn = getAccessToken.expires_in || 3600;
+
     try {
       const longLived = await (
         await fetch(
@@ -196,6 +180,9 @@ export class InstagramStandaloneProvider
       ).json();
       if (longLived.access_token) {
         finalAccessToken = longLived.access_token;
+        tokenExpiresIn =
+          longLived.expires_in ||
+          dayjs().add(58, 'days').unix() - dayjs().unix();
       }
     } catch (e) {
       console.error('IG_LONGLIVED_ERR:', e);
@@ -211,7 +198,17 @@ export class InstagramStandaloneProvider
       )
     ).json();
 
+    if (me?.error) {
+      const errMsg = me.error.message || 'Failed to retrieve Instagram profile';
+      console.error('IG_ME_ERROR:', errMsg);
+      return errMsg;
+    }
+
     const finalId = String(me?.id || me?.user_id || getAccessToken?.user_id || '');
+    if (!finalId) {
+      return 'Instagram user ID not found in profile';
+    }
+
     const finalUsername = me?.username || 'instagram';
     const finalName = me?.name || finalUsername;
     const finalPicture = me?.profile_picture_url || '';
@@ -221,7 +218,7 @@ export class InstagramStandaloneProvider
       name: finalName,
       accessToken: finalAccessToken,
       refreshToken: finalAccessToken,
-      expiresIn: dayjs().add(58, 'days').unix() - dayjs().unix(),
+      expiresIn: tokenExpiresIn,
       picture: finalPicture,
       username: finalUsername,
     };

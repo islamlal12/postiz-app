@@ -56,25 +56,34 @@ export class NoAuthIntegrationsController {
     }
 
     const rawState = String(body.state || '');
-    const cleanState = rawState.replace(/#_.*$/, '').replace(/#.*$/, '').trim();
+    const cleanState = rawState.replace(/#.*$/, '').trim();
     const rawCode = String(body.code || '');
-    const cleanCode = rawCode.replace(/#_.*$/, '').replace(/#.*$/, '').trim();
+    const cleanCode = rawCode.replace(/#.*$/, '').trim();
     body.code = cleanCode;
 
     const integrationProvider =
       this._integrationManager.getSocialIntegration(integration);
 
-    let getCodeVerifier = integrationProvider.customFields
+    const stateKey = (await ioRedis.exists(`login:${cleanState}`))
+      ? cleanState
+      : rawState;
+
+    const getCodeVerifier = integrationProvider.customFields
       ? 'none'
-      : ((await ioRedis.get(`login:${rawState}`)) || (await ioRedis.get(`login:${cleanState}`)));
+      : await ioRedis.get(`login:${stateKey}`);
+
     if (!getCodeVerifier) {
-      console.log(`[connectSocialMedia] login state not found in redis for ${integration}. Fallback to none.`);
-      getCodeVerifier = 'none';
+      throw new HttpException(
+        'This connection link expired or was already used, please connect the channel again',
+        400
+      );
     }
 
-    const organization =
-      (await ioRedis.get(`organization:${rawState}`)) ||
-      (await ioRedis.get(`organization:${cleanState}`));
+    const orgKey = (await ioRedis.exists(`organization:${cleanState}`))
+      ? cleanState
+      : rawState;
+
+    const organization = await ioRedis.get(`organization:${orgKey}`);
     if (!organization) {
       throw new HttpException(
         'This connection link expired or was already used, please connect the channel again',
@@ -85,16 +94,25 @@ export class NoAuthIntegrationsController {
     const org = await this._organizationService.getOrgById(organization);
 
     const details = integrationProvider.externalUrl
-      ? ((await ioRedis.get(`external:${rawState}`)) || (await ioRedis.get(`external:${cleanState}`)))
+      ? ((await ioRedis.get(`external:${cleanState}`)) || (await ioRedis.get(`external:${rawState}`)))
       : undefined;
 
     const refresh =
-      (await ioRedis.get(`refresh:${rawState}`)) ||
-      (await ioRedis.get(`refresh:${cleanState}`));
+      (await ioRedis.get(`refresh:${cleanState}`)) ||
+      (await ioRedis.get(`refresh:${rawState}`));
 
     const onboarding =
-      (await ioRedis.get(`onboarding:${rawState}`)) ||
-      (await ioRedis.get(`onboarding:${cleanState}`));
+      (await ioRedis.get(`onboarding:${cleanState}`)) ||
+      (await ioRedis.get(`onboarding:${rawState}`));
+
+    // Enforce single-use state cleanup
+    await Promise.allSettled([
+      ioRedis.del(`login:${cleanState}`, `login:${rawState}`),
+      ioRedis.del(`organization:${cleanState}`, `organization:${rawState}`),
+      ioRedis.del(`external:${cleanState}`, `external:${rawState}`),
+      ioRedis.del(`refresh:${cleanState}`, `refresh:${rawState}`),
+      ioRedis.del(`onboarding:${cleanState}`, `onboarding:${rawState}`),
+    ]);
 
     const {
       error,
