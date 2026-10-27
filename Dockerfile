@@ -26,7 +26,6 @@ RUN pnpm install --frozen-lockfile=false \
  && rm -rf /root/.local/share/pnpm \
  && rm -rf /root/.cache \
  && rm -rf /tmp/* \
- && find /app/node_modules -type d \( -name "@esbuild*" -o -name "@swc*" -o -name "typescript*" -o -name "@typescript-eslint*" -o -name "eslint*" -o -name "prettier*" -o -name "jest*" -o -name "vitest*" -o -name "@types" -o -name ".cache" \) -prune -exec rm -rf {} + \
  && pnpm store prune
 
 CMD ["sh", "-c", "pnpm dlx prisma@6.5.0 db push --accept-data-loss --schema ./libraries/nestjs-libraries/src/database/prisma/schema.prisma; nginx && pnpm run pm2"]
