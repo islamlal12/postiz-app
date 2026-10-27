@@ -21,9 +21,11 @@ COPY . /app
 COPY var/docker/nginx.conf /etc/nginx/nginx.conf
 
 RUN pnpm install --frozen-lockfile=false \
- && pnpm store prune
-
-RUN NODE_OPTIONS="--max-old-space-size=4096" pnpm run build \
+ && NODE_OPTIONS="--max-old-space-size=4096" pnpm run build \
+ && rm -rf apps/frontend/.next/cache \
+ && rm -rf /root/.local/share/pnpm \
+ && rm -rf /root/.cache \
+ && rm -rf /tmp/* \
  && pnpm store prune
 
 CMD ["sh", "-c", "nginx && pnpm run pm2"]
