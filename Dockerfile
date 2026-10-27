@@ -28,4 +28,4 @@ RUN pnpm install --frozen-lockfile=false \
  && rm -rf /tmp/* \
  && pnpm store prune
 
-CMD ["sh", "-c", "nginx && pnpm run pm2"]
+CMD ["sh", "-c", "pnpm dlx prisma@6.5.0 db push --accept-data-loss --schema ./libraries/nestjs-libraries/src/database/prisma/schema.prisma; nginx && pnpm run pm2"]
