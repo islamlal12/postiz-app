@@ -22,6 +22,7 @@ COPY var/docker/nginx.conf /etc/nginx/nginx.conf
 
 RUN pnpm install --frozen-lockfile=false \
  && NODE_OPTIONS="--max-old-space-size=4096" pnpm run build \
+ && pnpm prune --prod \
  && rm -rf apps/frontend/.next/cache \
  && rm -rf /root/.local/share/pnpm \
  && rm -rf /root/.cache \
